@@ -310,21 +310,16 @@ def write_func_to_vtk(func, filnename):
         f.write_mesh(mesh)
         f.write_function(func)
 
-
-"""
-if __name__ == '__main__':
-    import matplotlib.pyplot as plt
-
+def simple_test():
     SEC_IN_DAY = 24 * 60 * 60
     plot_the_data = False
     visualize_parameters = True
     vtk_output = False
 
-    mesh_name = 'tsx_ellipses_regions'
+    mesh_name = 'tsx_ellipses_regions_coarse'
     mesh_dir = '.'
     os.makedirs(mesh_dir, exist_ok=True)
     mesh_prefix = f'{mesh_dir}/{mesh_name}'  # TODO: nicer logic and names
-    provide_tsx_mesh(mesh_prefix)
 
     young_e = 6e10
     poisson_nu = 0.2
@@ -342,28 +337,60 @@ if __name__ == '__main__':
     # example data to test functionality
     lmbda_values = [lmbda + _ for _ in range(number_of_subdomains)]
     mu_values = [mu + _ for _ in range(number_of_subdomains)]
-    alpha_values = [alpha - 0.00001*_ for _ in range(number_of_subdomains)]
-    cpp_values = [cpp + _*1.0e-14 for _ in range(number_of_subdomains)]
-    k_values = [6.0e-19 + _*1.0e-20 for _ in range(number_of_subdomains)]
+    alpha_values = [alpha - 0.00001 * _ for _ in range(number_of_subdomains)]
+    cpp_values = [cpp + _ * 1.0e-14 for _ in range(number_of_subdomains)]
+    k_values = [6.0e-19 + _ * 1.0e-20 for _ in range(number_of_subdomains)]
 
     # converts lists to dolfinx functions on respective subdomains
     lmbda_func, mu_func, alpha_func, cpp_func, k_func = prepare_coefficient_functions(tsx_mesh, cell_tags,
-                                                                                      lmbda_values, mu_values, alpha_values, cpp_values, k_values)
+                                                                                      lmbda_values, mu_values,
+                                                                                      alpha_values, cpp_values,
+                                                                                      k_values)
 
     # the actual computation
+    tolerance = 1e-7
     pressure_data = tsx_setup_and_computation(tsx_mesh,
                                               lmbda_func, mu_func, alpha_func, cpp_func, k_func,
-                                              tau_f=SEC_IN_DAY/2, t_steps_num=100)
+                                              tau_f=SEC_IN_DAY / 2, t_steps_num=800,
+                                              solver_type='iterative', rtol=tolerance)
+    plot_pressures(pressure_data, tolerance)
 
-    print(pressure_data)
 
-    if plot_the_data:
-        plot_pressures(pressure_data)
+def wrapper_test():
+    import h5py
+    from wrapper4 import SolverTSX
+    from denormalize import plot_observations_vs_reference, create_denormalizer_tsx_9subdomains
+    prior = create_denormalizer_tsx_9subdomains()
 
-    if visualize_parameters:
-        pyvista_plot(k_func)
+    no_subdomains = 9
+    no_parameters = no_subdomains * 4 + 3  # 36
+    no_observations = 2 * 18 * 4  # 144
 
-    if vtk_output:
-        func_name = 'k'
-        write_func_to_vtk(k_func, f'{mesh_dir}/{func_name}.vtk')
-"""
+    # create solver instances
+    rtol = 1e-10
+    solver_direct = SolverTSX(solver_type='direct')
+    solver_iterative = SolverTSX(solver_type='iterative', rtol=rtol)
+    solvers = solver_iterative, solver_direct
+
+    with h5py.File('subset_inputs_outputs.h5', 'r') as file:
+        inputs = file['inputs'][:]
+        outputs = file['outputs'][:]
+
+    for i in range(10):
+        parameter_estimates = inputs[i, :]
+        for solver_instance in solvers:
+            solver_instance.set_parameters(prior.transform(parameter_estimates))
+            solver_output = solver_instance.get_observations()
+            print(np.linalg.norm(solver_output - outputs[i, :]))
+            # plot_pressures(solver_output, rtol)
+        print('~~~')
+
+
+if __name__ == '__main__':
+    import matplotlib.pyplot as plt
+    # simple_test()
+
+    wrapper_test()
+
+
+
