@@ -187,7 +187,7 @@ def tsx_setup_and_computation(mesh,
 
     # bc -> zero normal displacements, 3e6 outer pressure and 3e6 to zero pressure in tunnel
     # Dirichlet
-    pressure_init = 3e6  # water pressure in the massive, initial and outer condition for pressure
+    pressure_init = -3e6  # water pressure in the massive, initial and outer condition for pressure
     pbc_expression = Constant(mesh, pressure_init * max(0.0, 1 - tau_f / (17 * SEC_IN_DAY)))
     # TODO: use generated domains
     bcs = generate_dirichlet_bc_tsx(mesh, V, pbc_expression, pressure_outer=pressure_init)
@@ -203,8 +203,8 @@ def tsx_setup_and_computation(mesh,
     ff_term += k * inner(grad(p), grad(q)) * dx
 
     # antisymmetric but coercive formulation
-    a = dfx.fem.form(2*mu*inner(epsilon(u), epsilon(w))*dx + lmbda*div(u)*div(w)*dx - alpha*p*div(w)*dx +
-                     alpha/tau*q*div(u)*dx + ff_term)
+    a = dfx.fem.form(2*mu*inner(epsilon(u), epsilon(w))*dx + lmbda*div(u)*div(w)*dx + alpha*p*div(w)*dx +
+                     alpha*q*div(u)*dx - tau*ff_term)
 
     # volume forces
     f = Constant(mesh, (0.0, 0.0))  # elastic volume force
@@ -245,13 +245,13 @@ def tsx_setup_and_computation(mesh,
     # time stepping
     current_time = 0.0
 
-    pressure_values = [p_h.eval(ready_eval_points, eval_cells)]
+    pressure_values = [-p_h.eval(ready_eval_points, eval_cells)]
     for _ in range(1, t_steps_num):
         current_time += tau_f
         sigma_expression.value = min(1.0, current_time/(17*SEC_IN_DAY))
         pbc_expression.value = pressure_init*max(0.0, 1 - current_time/(17*SEC_IN_DAY))
-        L = dfx.fem.form(inner(f, w)*dx + g*q*dx +
-                         alpha/tau*div(u_h)*q*dx + cpp/tau*p_h*q*dx -
+        L = dfx.fem.form(inner(f, w)*dx + tau*g*q*dx +
+                         alpha*div(u_h)*q*dx - cpp*p_h*q*dx -
                          sigma_expression*inner(sigma_init, epsilon(w))*dx)
 
         b = dfx.fem.petsc.assemble_vector(L)
@@ -266,7 +266,7 @@ def tsx_setup_and_computation(mesh,
                 exit()
         x_h.x.scatter_forward()
         u_h, p_h = x_h.split()
-        pressure_values.append(p_h.eval(ready_eval_points, eval_cells))
+        pressure_values.append(-p_h.eval(ready_eval_points, eval_cells))
 
     if solver_type == 'iterative':
         print(f'Solver on average used {iteration_counter/(t_steps_num-1)} iterations')
