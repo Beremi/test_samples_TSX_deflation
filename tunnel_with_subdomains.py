@@ -163,7 +163,9 @@ def epsilon(u):
 def tsx_setup_and_computation(mesh,
                               lmbda, mu, alpha, cpp, k,
                               tau_f, t_steps_num,
-                              sigma_xx=-45e6, sigma_yy=-11e6, sigma_angle=0):
+                              sigma_xx=-45e6, sigma_yy=-11e6, sigma_angle=0,
+                              solver_type='direct',
+                              rtol=1e-8):
     # time step parameter
     tau = Constant(mesh, tau_f)
 
@@ -218,12 +220,27 @@ def tsx_setup_and_computation(mesh,
 
     # PETSc4py section with solver setup
     solver = PETSc.KSP().create(mesh.comm)
-    solver.setOperators(A, A)
-    solver.setType('preonly')
-    solver.getPC().setType('lu')
-    opts = PETSc.Options()
-    opts['pc_factor_mat_solver_type'] = 'mumps'
-    solver.setFromOptions()
+
+    if solver_type == 'direct':
+        solver.setOperators(A, A)
+        solver.setType('preonly')
+        solver.getPC().setType('lu')
+        solver.getPC().setFactorSolverType('mumps')
+    elif solver_type == 'iterative':
+        preco_naive = dfx.fem.form(2*mu*inner(epsilon(u), epsilon(w))*dx + lmbda*div(u)*div(w)*dx + tau*ff_term +
+                                   alpha**2/(lmbda + 2*mu)*p*q*dx)
+        P = dfx.fem.petsc.assemble_matrix(preco_naive, bcs=bcs)
+        P.assemble()
+
+        solver.setOperators(A, P)
+        solver.setType('fgmres')
+        solver.getPC().setType('lu')
+        solver.getPC().setFactorSolverType('mumps')
+        solver.setTolerances(rtol=rtol)
+        iteration_counter = 0
+    else:
+        print(f'{solver_type} is invalid option')
+        exit()
 
     # time stepping
     current_time = 0.0
@@ -242,14 +259,21 @@ def tsx_setup_and_computation(mesh,
         b.ghostUpdate(addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE)
         dfx.fem.set_bc(b, bcs)
         solver.solve(b, x_h.x.petsc_vec)  # .x.petsc_vec instead of .vector
+        if solver_type == 'iterative':
+            iteration_counter += solver.getIterationNumber()
+            if solver.getConvergedReason() != 2:  # 2 is converged rtol
+                print('problems with convergence')
+                exit()
         x_h.x.scatter_forward()
         u_h, p_h = x_h.split()
         pressure_values.append(p_h.eval(ready_eval_points, eval_cells))
 
+    if solver_type == 'iterative':
+        print(f'Solver on average used {iteration_counter/(t_steps_num-1)} iterations')
     return pressure_values
 
 
-def plot_pressures(data):
+def plot_pressures(data, tolerance):
     data_fp = np.zeros((4, len(data)))
     for i, _ in enumerate(data):
         data_fp[:, i] = [value[0] for value in data[i]]
@@ -264,7 +288,7 @@ def plot_pressures(data):
     plt.legend()
     plt.ylabel('Pressure [Pa]')
     plt.xlabel('Days')
-    plt.title('Pressure in control points')
+    plt.title(f'Pressure in control points, inner solve with {tolerance} rtol')
     plt.show()
 
 
