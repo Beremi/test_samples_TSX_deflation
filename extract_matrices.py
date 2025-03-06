@@ -1,8 +1,9 @@
 from scipy.sparse import csr_matrix
 import petsc4py
+import h5py
 from petsc4py import PETSc
 
-def extract_2x2submatrices(matA, spaceV):
+def extract_2x2submatrices(matA, spaceV, sparse=False):
     V0_dofs = spaceV.sub(0).dofmap.list.flatten()
     V1_dofs = spaceV.sub(1).dofmap.list.flatten()
     # TODO: map from dolfinx incides to tight ranges
@@ -17,11 +18,13 @@ def extract_2x2submatrices(matA, spaceV):
 
     res = []
     for mat in (Auu, Aup, Apu, App):
-        # mat.convert("aij")  # for big matrices
-        mat.convert("dense")  # for small matrices
-        # mat_data = mat.getValuesCSR()  # for big matrices
-        # mat_data = csr_matrix(mat_data)  # for big matrices
-        mat_data = mat.getDenseArray()  # for small matrices
+        if sparse:
+            mat.convert("aij")
+            data, indices, indpts = mat.getValuesCSR()  # naming taken from scipy docs
+            mat_data = (data, indices, indpts)
+        else:
+            mat.convert("dense")
+            mat_data = mat.getDenseArray()
         res.append(mat_data)
     return res
 
@@ -39,10 +42,12 @@ def extract_2x2subvectors(vecb, spaceV):
 
     return [vec_u.getArray().copy(), vec_p.getArray().copy()]
 
-def extract_matrix(matA):
-    matA.convert("dense")  # for small matrix
-    # mat.convert("aij")  # for big matrices
-    mat_data = matA.getDenseArray()  # for small matrix
-    # mat_data = mat.getValuesCSR()  # for big matrices
-    # mat_data = csr_matrix(mat_data)
+def extract_matrix(matA, sparse=False):
+    if sparse:
+        matA.convert("aij")
+        data, indices, indpts = matA.getValuesCSR()
+        mat_data = (data, indices, indpts)
+    else:
+        matA.convert("dense")
+        mat_data = matA.getDenseArray()
     return mat_data
