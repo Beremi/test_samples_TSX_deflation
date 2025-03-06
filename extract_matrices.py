@@ -79,3 +79,9 @@ def load_matrices_from_hdf5(filename, sparse=False):
                 matrices.append(f[f"matrix_{i}"][:])
             i += 1
     return matrices
+
+def test_save_and_load():
+    pass  # TODO
+
+if __name__ == "__main__":
+    test_save_and_load()
