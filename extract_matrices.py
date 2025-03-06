@@ -51,3 +51,31 @@ def extract_matrix(matA, sparse=False):
         matA.convert("dense")
         mat_data = matA.getDenseArray()
     return mat_data
+
+def save_matrices_to_hdf5(filename, matrices, sparse=False):
+    """ generated code"""
+    with h5py.File(filename, 'w') as f:
+        for i, mat in enumerate(matrices):
+            if sparse:
+                # Save CSR components separately
+                f.create_dataset(f"matrix_{i}_data", data=mat[0])
+                f.create_dataset(f"matrix_{i}_indices", data=mat[1])
+                f.create_dataset(f"matrix_{i}_indptr", data=mat[2])
+            else:
+                f.create_dataset(f"matrix_{i}", data=mat)
+
+def load_matrices_from_hdf5(filename, sparse=False):
+    """ generated code """
+    matrices = []
+    with h5py.File(filename, 'r') as f:
+        i = 0
+        while f"matrix_{i}" in f or f"matrix_{i}_data" in f:
+            if sparse:
+                data = f[f"matrix_{i}_data"][:]
+                indices = f[f"matrix_{i}_indices"][:]
+                indptr = f[f"matrix_{i}_indptr"][:]
+                matrices.append(csr_matrix((data, indices, indptr)))
+            else:
+                matrices.append(f[f"matrix_{i}"][:])
+            i += 1
+    return matrices
