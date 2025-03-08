@@ -1,12 +1,15 @@
 from scipy.sparse import csr_matrix
 import petsc4py
 import h5py
+import numpy as np
 from petsc4py import PETSc
 
 def extract_2x2submatrices(matA, spaceV, sparse=False):
     V0_dofs = spaceV.sub(0).dofmap.list.flatten()
     V1_dofs = spaceV.sub(1).dofmap.list.flatten()
-    # TODO: map from dolfinx incides to tight ranges
+
+    V0_dofs = np.unique(V0_dofs)
+    V1_dofs = np.unique(V1_dofs)
 
     is_u = PETSc.IS().createGeneral(V0_dofs)
     is_p = PETSc.IS().createGeneral(V1_dofs)
@@ -20,7 +23,7 @@ def extract_2x2submatrices(matA, spaceV, sparse=False):
     for mat in (Auu, Aup, Apu, App):
         if sparse:
             mat.convert("aij")
-            data, indices, indpts = mat.getValuesCSR()  # naming taken from scipy docs
+            indpts, indices, data = mat.getValuesCSR()  # naming taken from scipy docs
             mat_data = (data, indices, indpts)
         else:
             mat.convert("dense")
@@ -31,7 +34,9 @@ def extract_2x2submatrices(matA, spaceV, sparse=False):
 def extract_2x2subvectors(vecb, spaceV):
     V0_dofs = spaceV.sub(0).dofmap.list.flatten()
     V1_dofs = spaceV.sub(1).dofmap.list.flatten()
-    # TODO: map from dolfinx incides to tight ranges
+
+    V0_dofs = np.unique(V0_dofs)
+    V1_dofs = np.unique(V1_dofs)
 
     is_u = PETSc.IS().createGeneral(V0_dofs)
     is_p = PETSc.IS().createGeneral(V1_dofs)
@@ -45,7 +50,7 @@ def extract_2x2subvectors(vecb, spaceV):
 def extract_matrix(matA, sparse=False):
     if sparse:
         matA.convert("aij")
-        data, indices, indpts = matA.getValuesCSR()
+        indpts, indices, data = matA.getValuesCSR()
         mat_data = (data, indices, indpts)
     else:
         matA.convert("dense")
