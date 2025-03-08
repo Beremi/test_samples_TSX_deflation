@@ -17,6 +17,9 @@ import dolfinx.fem.petsc  # needed to carry out the init :(
 from dolfinx.fem import Constant
 from dolfinx import plot
 
+from extract_matrices import save_full_matrix, save_matrix_as_blocks, extract_2x2subvectors, save_vectors_to_hdf5, \
+    load_matrices_from_hdf5
+
 # from ellipses_regions_generator import generate_tsx_mesh_with_regions, Ellipse
 
 
@@ -163,7 +166,10 @@ def epsilon(u):
 def tsx_setup_and_computation(mesh,
                               lmbda, mu, alpha, cpp, k,
                               tau_f, t_steps_num,
-                              sigma_xx=-45e6, sigma_yy=-11e6, sigma_angle=0):
+                              sigma_xx=-45e6, sigma_yy=-11e6, sigma_angle=0,
+                              solver_type='direct',
+                              rtol=1e-8,
+                              filename=None):
     # time step parameter
     tau = Constant(mesh, tau_f)
 
@@ -185,7 +191,7 @@ def tsx_setup_and_computation(mesh,
 
     # bc -> zero normal displacements, 3e6 outer pressure and 3e6 to zero pressure in tunnel
     # Dirichlet
-    pressure_init = 3e6  # water pressure in the massive, initial and outer condition for pressure
+    pressure_init = -3e6  # water pressure in the massive, initial and outer condition for pressure
     pbc_expression = Constant(mesh, pressure_init * max(0.0, 1 - tau_f / (17 * SEC_IN_DAY)))
     # TODO: use generated domains
     bcs = generate_dirichlet_bc_tsx(mesh, V, pbc_expression, pressure_outer=pressure_init)
@@ -200,9 +206,9 @@ def tsx_setup_and_computation(mesh,
     ff_term = cpp / tau * p * q * dx  # flux-flux term
     ff_term += k * inner(grad(p), grad(q)) * dx
 
-    # antisymmetric but coercive formulation
-    a = dfx.fem.form(2*mu*inner(epsilon(u), epsilon(w))*dx + lmbda*div(u)*div(w)*dx - alpha*p*div(w)*dx +
-                     alpha/tau*q*div(u)*dx + ff_term)
+    # symmetric saddle point formulation
+    a = dfx.fem.form(2*mu*inner(epsilon(u), epsilon(w))*dx + lmbda*div(u)*div(w)*dx + alpha*p*div(w)*dx +
+                     alpha*q*div(u)*dx - tau*ff_term)
 
     # volume forces
     f = Constant(mesh, (0.0, 0.0))  # elastic volume force
@@ -216,25 +222,57 @@ def tsx_setup_and_computation(mesh,
     A = dfx.fem.petsc.assemble_matrix(a, bcs=bcs)
     A.assemble()
 
+    a_elastic = dfx.fem.form(2*mu*inner(epsilon(u), epsilon(w))*dx + lmbda*div(u)*div(w)*dx)
+    A_elastic = dfx.fem.petsc.assemble_matrix(a_elastic, bcs=bcs)
+    A_elastic.assemble()
+
+    if filename:
+        save_full_matrix(A_elastic, f'{filename}_elastic.h5')
+        save_full_matrix(A, f'{filename}_full.h5')
+        save_matrix_as_blocks(A, V, f'{filename}_as_blocks.h5')
+
     # PETSc4py section with solver setup
     solver = PETSc.KSP().create(mesh.comm)
-    solver.setOperators(A, A)
-    solver.setType('preonly')
-    solver.getPC().setType('lu')
-    opts = PETSc.Options()
-    opts['pc_factor_mat_solver_type'] = 'mumps'
-    solver.setFromOptions()
+
+    if solver_type == 'direct':
+        solver.setOperators(A, A)
+        solver.setType('preonly')
+        solver.getPC().setType('lu')
+        solver.getPC().setFactorSolverType('mumps')
+    elif solver_type == 'iterative':
+        preco_naive = dfx.fem.form(2*mu*inner(epsilon(u), epsilon(w))*dx + lmbda*div(u)*div(w)*dx + tau*ff_term +
+                                   alpha**2/(lmbda + 2*mu)*p*q*dx)
+        P = dfx.fem.petsc.assemble_matrix(preco_naive, bcs=bcs)
+        P.assemble()
+
+        preco_naive_triangular = dfx.fem.form(2*mu*inner(epsilon(u), epsilon(w))*dx + lmbda*div(u)*div(w)*dx + tau*ff_term +
+                                   alpha**2/(lmbda + 2*mu)*p*q*dx + alpha*p*div(w)*dx)
+        P_triangular = dfx.fem.petsc.assemble_matrix(preco_naive_triangular, bcs=bcs)
+        P_triangular.assemble()
+        if filename:
+            save_matrix_as_blocks(P, V,f'{filename}_diag_preco.h5')
+            save_matrix_as_blocks(P_triangular, V,f'{filename}_triang_preco.h5')
+
+        solver.setOperators(A, P)
+        solver.setType('fgmres')
+        solver.getPC().setType('lu')
+        solver.getPC().setFactorSolverType('mumps')
+        solver.setTolerances(rtol=rtol)
+        iteration_counter = 0
+    else:
+        print(f'{solver_type} is invalid option')
+        exit()
 
     # time stepping
     current_time = 0.0
 
-    pressure_values = [p_h.eval(ready_eval_points, eval_cells)]
-    for _ in range(1, t_steps_num):
+    pressure_values = [-p_h.eval(ready_eval_points, eval_cells)]
+    for step in range(1, t_steps_num):
         current_time += tau_f
         sigma_expression.value = min(1.0, current_time/(17*SEC_IN_DAY))
         pbc_expression.value = pressure_init*max(0.0, 1 - current_time/(17*SEC_IN_DAY))
-        L = dfx.fem.form(inner(f, w)*dx + g*q*dx +
-                         alpha/tau*div(u_h)*q*dx + cpp/tau*p_h*q*dx -
+        L = dfx.fem.form(inner(f, w)*dx + tau*g*q*dx +
+                         alpha*div(u_h)*q*dx - cpp*p_h*q*dx -
                          sigma_expression*inner(sigma_init, epsilon(w))*dx)
 
         b = dfx.fem.petsc.assemble_vector(L)
@@ -242,14 +280,26 @@ def tsx_setup_and_computation(mesh,
         b.ghostUpdate(addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE)
         dfx.fem.set_bc(b, bcs)
         solver.solve(b, x_h.x.petsc_vec)  # .x.petsc_vec instead of .vector
+        if filename:
+            vecs = extract_2x2subvectors(b, V)
+            save_vectors_to_hdf5(f'{filename}_rhs.h5', vecs[0], vecs[1], step)
+            vecs = extract_2x2subvectors(x_h.x.petsc_vec, V)
+            save_vectors_to_hdf5(f'{filename}_sol.h5', vecs[0], vecs[1], step)
+        if solver_type == 'iterative':
+            iteration_counter += solver.getIterationNumber()
+            if solver.getConvergedReason() != 2:  # 2 is converged rtol
+                print('problems with convergence')
+                exit()
         x_h.x.scatter_forward()
         u_h, p_h = x_h.split()
-        pressure_values.append(p_h.eval(ready_eval_points, eval_cells))
+        pressure_values.append(-p_h.eval(ready_eval_points, eval_cells))
 
+    if solver_type == 'iterative':
+        print(f'Solver on average used {iteration_counter/(t_steps_num-1)} iterations')
     return pressure_values
 
 
-def plot_pressures(data):
+def plot_pressures(data, tolerance):
     data_fp = np.zeros((4, len(data)))
     for i, _ in enumerate(data):
         data_fp[:, i] = [value[0] for value in data[i]]
@@ -264,7 +314,7 @@ def plot_pressures(data):
     plt.legend()
     plt.ylabel('Pressure [Pa]')
     plt.xlabel('Days')
-    plt.title('Pressure in control points')
+    plt.title(f'Pressure in control points, inner solve with {tolerance} rtol')
     plt.show()
 
 
@@ -286,21 +336,16 @@ def write_func_to_vtk(func, filnename):
         f.write_mesh(mesh)
         f.write_function(func)
 
-
-"""
-if __name__ == '__main__':
-    import matplotlib.pyplot as plt
-
+def simple_test():
     SEC_IN_DAY = 24 * 60 * 60
     plot_the_data = False
     visualize_parameters = True
     vtk_output = False
 
-    mesh_name = 'tsx_ellipses_regions'
+    mesh_name = 'tsx_ellipses_regions_coarse'
     mesh_dir = '.'
     os.makedirs(mesh_dir, exist_ok=True)
     mesh_prefix = f'{mesh_dir}/{mesh_name}'  # TODO: nicer logic and names
-    provide_tsx_mesh(mesh_prefix)
 
     young_e = 6e10
     poisson_nu = 0.2
@@ -318,28 +363,95 @@ if __name__ == '__main__':
     # example data to test functionality
     lmbda_values = [lmbda + _ for _ in range(number_of_subdomains)]
     mu_values = [mu + _ for _ in range(number_of_subdomains)]
-    alpha_values = [alpha - 0.00001*_ for _ in range(number_of_subdomains)]
-    cpp_values = [cpp + _*1.0e-14 for _ in range(number_of_subdomains)]
-    k_values = [6.0e-19 + _*1.0e-20 for _ in range(number_of_subdomains)]
+    alpha_values = [alpha - 0.00001 * _ for _ in range(number_of_subdomains)]
+    cpp_values = [cpp + _ * 1.0e-14 for _ in range(number_of_subdomains)]
+    k_values = [6.0e-19 + _ * 1.0e-20 for _ in range(number_of_subdomains)]
 
     # converts lists to dolfinx functions on respective subdomains
     lmbda_func, mu_func, alpha_func, cpp_func, k_func = prepare_coefficient_functions(tsx_mesh, cell_tags,
-                                                                                      lmbda_values, mu_values, alpha_values, cpp_values, k_values)
+                                                                                      lmbda_values, mu_values,
+                                                                                      alpha_values, cpp_values,
+                                                                                      k_values)
 
     # the actual computation
+    tolerance = 1e-7
     pressure_data = tsx_setup_and_computation(tsx_mesh,
                                               lmbda_func, mu_func, alpha_func, cpp_func, k_func,
-                                              tau_f=SEC_IN_DAY/2, t_steps_num=100)
+                                              tau_f=SEC_IN_DAY / 2, t_steps_num=800,
+                                              solver_type='iterative', rtol=tolerance)
+    plot_pressures(pressure_data, tolerance)
 
-    print(pressure_data)
 
-    if plot_the_data:
-        plot_pressures(pressure_data)
+def wrapper_test():
+    import h5py
+    from wrapper4 import SolverTSX
+    from denormalize import plot_observations_vs_reference, create_denormalizer_tsx_9subdomains
+    prior = create_denormalizer_tsx_9subdomains()
 
-    if visualize_parameters:
-        pyvista_plot(k_func)
+    no_subdomains = 9
+    no_parameters = no_subdomains * 4 + 3  # 36
+    no_observations = 2 * 18 * 4  # 144
 
-    if vtk_output:
-        func_name = 'k'
-        write_func_to_vtk(k_func, f'{mesh_dir}/{func_name}.vtk')
-"""
+    # create solver instances
+    rtol = 1e-10
+    solver_direct = SolverTSX(solver_type='direct')
+    solver_iterative = SolverTSX(solver_type='iterative', rtol=rtol)
+    solvers = solver_iterative, solver_direct
+
+    with h5py.File('subset_inputs_outputs.h5', 'r') as file:
+        inputs = file['inputs'][:]
+        outputs = file['outputs'][:]
+
+    for i in range(10):
+        parameter_estimates = inputs[i, :]
+        for solver_instance in solvers:
+            solver_instance.set_parameters(prior.transform(parameter_estimates))
+            solver_output = solver_instance.get_observations()
+            print(np.linalg.norm(solver_output - outputs[i, :]))
+            # plot_pressures(solver_output, rtol)
+        print('~~~')
+
+def wrapper_test_saving():
+    import h5py
+    from wrapper4 import SolverTSX
+    from denormalize import plot_observations_vs_reference, create_denormalizer_tsx_9subdomains
+    prior = create_denormalizer_tsx_9subdomains()
+
+    no_subdomains = 9
+    no_parameters = no_subdomains * 4 + 3  # 36
+    no_observations = 2 * 18 * 4  # 144
+
+    # create solver instances
+    rtol = 1e-10
+    solver_iterative = SolverTSX(solver_type='iterative', rtol=rtol)
+
+    with h5py.File('subset_inputs_outputs.h5', 'r') as file:
+        inputs = file['inputs'][:]
+        outputs = file['outputs'][:]
+
+    for i in range(2):
+        parameter_estimates = inputs[i, :]
+        solver_iterative.set_parameters(prior.transform(parameter_estimates))
+        solver_iterative.filename = f'testrun_{i}'
+        solver_iterative.get_observations()
+
+    # loading
+    A_big = load_matrices_from_hdf5('testrun_0_full.h5')[0]
+    A_elastic_with_many_zeros = load_matrices_from_hdf5('testrun_0_full_elastic.h5')[0]  # elastic matrix on big space
+    blocks = load_matrices_from_hdf5('testrun_0_as_blocks.h5')  # 4 csr matrices in list
+    # A_elastic = blocks[0] elastic matrix on displacement space
+    Pdblocks = load_matrices_from_hdf5('testrun_0_diag_preco.h5')  # 4 csr matrices for preco, two are zero
+    # A_elastic = Pdblocks[0]
+    Ptblocks = load_matrices_from_hdf5('testrun_0_triang_preco.h5')
+    # A_elastic = Ptblocks[0]
+    rhs_u, rhs_p = load_matrices_from_hdf5('testrun_0_rhs.h5')  # each rhs_* is a list of ndarrays
+
+
+if __name__ == '__main__':
+    import matplotlib.pyplot as plt
+    # simple_test()
+
+    wrapper_test_saving()
+
+
+
