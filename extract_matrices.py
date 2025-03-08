@@ -4,7 +4,7 @@ import h5py
 import numpy as np
 from petsc4py import PETSc
 
-def extract_2x2submatrices(matA, spaceV, sparse=False):
+def extract_2x2submatrices(matA, spaceV, sparse=True):
     V0_dofs = spaceV.sub(0).dofmap.list.flatten()
     V1_dofs = spaceV.sub(1).dofmap.list.flatten()
 
@@ -47,7 +47,7 @@ def extract_2x2subvectors(vecb, spaceV):
 
     return [vec_u.getArray().copy(), vec_p.getArray().copy()]
 
-def extract_matrix(matA, sparse=False):
+def extract_matrix(matA, sparse=True):
     if sparse:
         matA.convert("aij")
         indpts, indices, data = matA.getValuesCSR()
@@ -57,7 +57,7 @@ def extract_matrix(matA, sparse=False):
         mat_data = matA.getDenseArray()
     return mat_data
 
-def save_matrices_to_hdf5(filename, matrices, sparse=False):
+def save_matrices_to_hdf5(filename, matrices, sparse=True):
     """ generated code"""
     with h5py.File(filename, 'w') as f:
         for i, mat in enumerate(matrices):
@@ -69,7 +69,7 @@ def save_matrices_to_hdf5(filename, matrices, sparse=False):
             else:
                 f.create_dataset(f"matrix_{i}", data=mat)
 
-def load_matrices_from_hdf5(filename, sparse=False):
+def load_matrices_from_hdf5(filename, sparse=True):
     """ generated code """
     matrices = []
     with h5py.File(filename, 'r') as f:
