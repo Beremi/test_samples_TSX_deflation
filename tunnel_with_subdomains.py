@@ -17,7 +17,8 @@ import dolfinx.fem.petsc  # needed to carry out the init :(
 from dolfinx.fem import Constant
 from dolfinx import plot
 
-from extract_matrices import save_full_matrix, save_matrix_as_blocks, extract_2x2subvectors, save_vectors_to_hdf5
+from extract_matrices import save_full_matrix, save_matrix_as_blocks, extract_2x2subvectors, save_vectors_to_hdf5, \
+    load_matrices_from_hdf5
 
 # from ellipses_regions_generator import generate_tsx_mesh_with_regions, Ellipse
 
@@ -433,6 +434,17 @@ def wrapper_test_saving():
         solver_iterative.set_parameters(prior.transform(parameter_estimates))
         solver_iterative.filename = f'testrun_{i}'
         solver_iterative.get_observations()
+
+    # loading
+    A_big = load_matrices_from_hdf5('testrun_0_full.h5')[0]
+    A_elastic_with_many_zeros = load_matrices_from_hdf5('testrun_0_full_elastic.h5')[0]  # elastic matrix on big space
+    blocks = load_matrices_from_hdf5('testrun_0_as_blocks.h5')  # 4 csr matrices in list
+    # A_elastic = blocks[0] elastic matrix on displacement space
+    Pdblocks = load_matrices_from_hdf5('testrun_0_diag_preco.h5')  # 4 csr matrices for preco, two are zero
+    # A_elastic = Pdblocks[0]
+    Ptblocks = load_matrices_from_hdf5('testrun_0_triang_preco.h5')
+    # A_elastic = Ptblocks[0]
+    rhs_u, rhs_p = load_matrices_from_hdf5('testrun_0_rhs.h5')  # each rhs_* is a list of ndarrays
 
 
 if __name__ == '__main__':
