@@ -205,7 +205,7 @@ def tsx_setup_and_computation(mesh,
     ff_term = cpp / tau * p * q * dx  # flux-flux term
     ff_term += k * inner(grad(p), grad(q)) * dx
 
-    # antisymmetric but coercive formulation
+    # symmetric saddle point formulation
     a = dfx.fem.form(2*mu*inner(epsilon(u), epsilon(w))*dx + lmbda*div(u)*div(w)*dx + alpha*p*div(w)*dx +
                      alpha*q*div(u)*dx - tau*ff_term)
 
