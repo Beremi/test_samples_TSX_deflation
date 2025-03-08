@@ -223,11 +223,11 @@ def tsx_setup_and_computation(mesh,
     A.assemble()
 
     a_elastic = dfx.fem.form(2*mu*inner(epsilon(u), epsilon(w))*dx + lmbda*div(u)*div(w)*dx)
-    A_elastic = dfx.fem.petsc.assemble_matrix(a_elastic, bcs=bcs)
+    A_elastic = dfx.fem.petsc.assemble_matrix(a_elastic)
     A_elastic.assemble()
 
     if filename:
-        save_full_matrix(A_elastic, f'{filename}_elastic.h5')
+        save_matrix_as_blocks(A_elastic, V, f'{filename}_elastic.h5')
         save_full_matrix(A, f'{filename}_full.h5')
         save_matrix_as_blocks(A, V, f'{filename}_as_blocks.h5')
 
@@ -437,13 +437,10 @@ def wrapper_test_saving():
 
     # loading
     A_big = load_matrices_from_hdf5('testrun_0_full.h5')[0]
-    A_elastic_with_many_zeros = load_matrices_from_hdf5('testrun_0_full_elastic.h5')[0]  # elastic matrix on big space
+    A_elastic = load_matrices_from_hdf5('testrun_0_elastic.h5')[0]  # elastic matrix on big space
     blocks = load_matrices_from_hdf5('testrun_0_as_blocks.h5')  # 4 csr matrices in list
-    # A_elastic = blocks[0] elastic matrix on displacement space
     Pdblocks = load_matrices_from_hdf5('testrun_0_diag_preco.h5')  # 4 csr matrices for preco, two are zero
-    # A_elastic = Pdblocks[0]
     Ptblocks = load_matrices_from_hdf5('testrun_0_triang_preco.h5')
-    # A_elastic = Ptblocks[0]
     rhs_u, rhs_p = load_matrices_from_hdf5('testrun_0_rhs.h5')  # each rhs_* is a list of ndarrays
 
 
