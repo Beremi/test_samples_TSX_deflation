@@ -3,7 +3,7 @@ import numpy as np
 
 
 class SolverTSX():
-    def __init__(self, solver_id=0, output_dir=None, solver_type='direct', rtol=None):
+    def __init__(self, solver_id=0, output_dir=None, solver_type='direct', rtol=None, filename=None):
         self.no_parameters = 9*4
         self.no_observations = 2*18*4
 
@@ -13,6 +13,7 @@ class SolverTSX():
         self.alpha_values = [0.2] * self.number_of_subdomains
         self.solver_type = solver_type
         self.rtol = rtol
+        self.filename = filename
 
     def set_parameters(self, par):
         NS = 9
@@ -34,7 +35,7 @@ class SolverTSX():
         data = tsx_setup_and_computation(self.mesh,
                                          lambda_fnc, mu_fnc, alpha_fnc, cpp_fnc, k_fnc, sigma_xx=-self.sigma_x, sigma_yy=-self.sigma_y,
                                          sigma_angle=self.sigma_angle, tau_f=24*60*60/2, t_steps_num=358*2,
-                                         solver_type=self.solver_type, rtol=self.rtol)
+                                         solver_type=self.solver_type, rtol=self.rtol, filename=self.filename)
         data_fp = np.zeros((4, len(data)))
         for i, item in enumerate(data):
             data_fp[:, i] = [value[0] for value in data[i]]
@@ -58,7 +59,7 @@ class SolverTSX():
         data = tsx_setup_and_computation(self.mesh,
                                          lambda_fnc, mu_fnc, alpha_fnc, cpp_fnc, k_fnc, sigma_xx=-self.sigma_x, sigma_yy=-self.sigma_y,
                                          sigma_angle=self.sigma_angle, tau_f=24*60*60/2, t_steps_num=358*2,
-                                         solver_type=self.solver_type, rtol=self.rtol)
+                                         solver_type=self.solver_type, rtol=self.rtol, filename=self.filename)
         return data
 
 

@@ -17,6 +17,8 @@ import dolfinx.fem.petsc  # needed to carry out the init :(
 from dolfinx.fem import Constant
 from dolfinx import plot
 
+from extract_matrices import save_full_matrix, save_matrix_as_blocks, extract_2x2subvectors, save_vectors_to_hdf5
+
 # from ellipses_regions_generator import generate_tsx_mesh_with_regions, Ellipse
 
 
@@ -165,7 +167,8 @@ def tsx_setup_and_computation(mesh,
                               tau_f, t_steps_num,
                               sigma_xx=-45e6, sigma_yy=-11e6, sigma_angle=0,
                               solver_type='direct',
-                              rtol=1e-8):
+                              rtol=1e-8,
+                              filename=None):
     # time step parameter
     tau = Constant(mesh, tau_f)
 
@@ -218,6 +221,15 @@ def tsx_setup_and_computation(mesh,
     A = dfx.fem.petsc.assemble_matrix(a, bcs=bcs)
     A.assemble()
 
+    a_elastic = dfx.fem.form(2*mu*inner(epsilon(u), epsilon(w))*dx + lmbda*div(u)*div(w)*dx)
+    A_elastic = dfx.fem.petsc.assemble_matrix(a_elastic, bcs=bcs)
+    A_elastic.assemble()
+
+    if filename:
+        save_full_matrix(A_elastic, f'{filename}_elastic.h5')
+        save_full_matrix(A, f'{filename}_full.h5')
+        save_matrix_as_blocks(A, V, f'{filename}_as_blocks.h5')
+
     # PETSc4py section with solver setup
     solver = PETSc.KSP().create(mesh.comm)
 
@@ -231,6 +243,14 @@ def tsx_setup_and_computation(mesh,
                                    alpha**2/(lmbda + 2*mu)*p*q*dx)
         P = dfx.fem.petsc.assemble_matrix(preco_naive, bcs=bcs)
         P.assemble()
+
+        preco_naive_triangular = dfx.fem.form(2*mu*inner(epsilon(u), epsilon(w))*dx + lmbda*div(u)*div(w)*dx + tau*ff_term +
+                                   alpha**2/(lmbda + 2*mu)*p*q*dx + alpha*p*div(w)*dx)
+        P_triangular = dfx.fem.petsc.assemble_matrix(preco_naive_triangular, bcs=bcs)
+        P_triangular.assemble()
+        if filename:
+            save_matrix_as_blocks(P, V,f'{filename}_diag_preco.h5')
+            save_matrix_as_blocks(P_triangular, V,f'{filename}_triang_preco.h5')
 
         solver.setOperators(A, P)
         solver.setType('fgmres')
@@ -246,7 +266,7 @@ def tsx_setup_and_computation(mesh,
     current_time = 0.0
 
     pressure_values = [-p_h.eval(ready_eval_points, eval_cells)]
-    for _ in range(1, t_steps_num):
+    for step in range(1, t_steps_num):
         current_time += tau_f
         sigma_expression.value = min(1.0, current_time/(17*SEC_IN_DAY))
         pbc_expression.value = pressure_init*max(0.0, 1 - current_time/(17*SEC_IN_DAY))
@@ -259,6 +279,11 @@ def tsx_setup_and_computation(mesh,
         b.ghostUpdate(addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE)
         dfx.fem.set_bc(b, bcs)
         solver.solve(b, x_h.x.petsc_vec)  # .x.petsc_vec instead of .vector
+        if filename:
+            vecs = extract_2x2subvectors(b, V)
+            save_vectors_to_hdf5(f'{filename}_rhs.h5', vecs[0], vecs[1], step)
+            vecs = extract_2x2subvectors(x_h.x.petsc_vec, V)
+            save_vectors_to_hdf5(f'{filename}_sol.h5', vecs[0], vecs[1], step)
         if solver_type == 'iterative':
             iteration_counter += solver.getIterationNumber()
             if solver.getConvergedReason() != 2:  # 2 is converged rtol
@@ -385,12 +410,36 @@ def wrapper_test():
             # plot_pressures(solver_output, rtol)
         print('~~~')
 
+def wrapper_test_saving():
+    import h5py
+    from wrapper4 import SolverTSX
+    from denormalize import plot_observations_vs_reference, create_denormalizer_tsx_9subdomains
+    prior = create_denormalizer_tsx_9subdomains()
+
+    no_subdomains = 9
+    no_parameters = no_subdomains * 4 + 3  # 36
+    no_observations = 2 * 18 * 4  # 144
+
+    # create solver instances
+    rtol = 1e-10
+    solver_iterative = SolverTSX(solver_type='iterative', rtol=rtol)
+
+    with h5py.File('subset_inputs_outputs.h5', 'r') as file:
+        inputs = file['inputs'][:]
+        outputs = file['outputs'][:]
+
+    for i in range(2):
+        parameter_estimates = inputs[i, :]
+        solver_iterative.set_parameters(prior.transform(parameter_estimates))
+        solver_iterative.filename = f'testrun_{i}'
+        solver_iterative.get_observations()
+
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
     # simple_test()
 
-    wrapper_test()
+    wrapper_test_saving()
 
 
 

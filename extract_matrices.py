@@ -85,6 +85,42 @@ def load_matrices_from_hdf5(filename, sparse=True):
             i += 1
     return matrices
 
+def save_full_matrix(matA, filename, sparse=True):
+    mat_data = extract_matrix(matA, sparse)
+    save_matrices_to_hdf5(filename, [mat_data])
+    print(f'Matrix saved to {filename}')
+
+def save_matrix_as_blocks(matA, spaceV, filename, sparse=True):
+    matrices = extract_2x2submatrices(matA, spaceV, sparse)
+    save_matrices_to_hdf5(filename, matrices)
+    print(f'Matrix saved as blocks to {filename}')
+
+
+def save_vectors_to_hdf5(filename, vec_u, vec_p, step):
+    """ generated code """
+    with h5py.File(filename, "a") as f:
+        for name, vec in zip(["vec_u", "vec_p"], [vec_u, vec_p]):
+            if name in f:
+                dset = f[name]
+                dset.resize((step + 1, vec.shape[0]))  # Expand along the first axis
+            else:
+                dset = f.create_dataset(name, shape=(step + 1, vec.shape[0]), maxshape=(None, vec.shape[0]),
+                                        dtype=vec.dtype)
+
+            dset[step, :] = vec  # Store the new time step
+
+def load_vectors_from_hdf5(filename):
+    """ generated code """
+    with h5py.File(filename, "r") as f:
+        vec_u = f["vec_u"][:]  # Load full dataset
+        vec_p = f["vec_p"][:]  # Load full dataset
+
+    # Restore as list of arrays, one per timestep
+    vec_u_list = [vec_u[i, :] for i in range(vec_u.shape[0])]
+    vec_p_list = [vec_p[i, :] for i in range(vec_p.shape[0])]
+
+    return vec_u_list, vec_p_list
+
 def test_save_and_load():
     pass  # TODO
 
