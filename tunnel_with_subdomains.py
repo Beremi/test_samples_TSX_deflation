@@ -169,9 +169,14 @@ def tsx_setup_and_computation(mesh,
                               sigma_xx=-45e6, sigma_yy=-11e6, sigma_angle=0,
                               solver_type='direct',
                               rtol=1e-8,
+                              scale=1.0,
                               filename=None):
     # time step parameter
     tau = Constant(mesh, tau_f)
+
+    # every term with q, p, or p_h get one multiplication by scale, term with two of these gets square
+    scale_f = scale  # pressure scale as float
+    scale = Constant(mesh, scale_f)
 
     # Spaces and functions
     P2 = element("Lagrange", mesh.basix_cell(), 2, shape=(mesh.geometry.dim,))
@@ -191,7 +196,7 @@ def tsx_setup_and_computation(mesh,
 
     # bc -> zero normal displacements, 3e6 outer pressure and 3e6 to zero pressure in tunnel
     # Dirichlet
-    pressure_init = -3e6  # water pressure in the massive, initial and outer condition for pressure
+    pressure_init = -3e6/scale_f  # water pressure in the massive, initial and outer condition for pressure
     pbc_expression = Constant(mesh, pressure_init * max(0.0, 1 - tau_f / (17 * SEC_IN_DAY)))
     # TODO: use generated domains
     bcs = generate_dirichlet_bc_tsx(mesh, V, pbc_expression, pressure_outer=pressure_init)
@@ -207,8 +212,8 @@ def tsx_setup_and_computation(mesh,
     ff_term += k * inner(grad(p), grad(q)) * dx
 
     # symmetric saddle point formulation
-    a = dfx.fem.form(2*mu*inner(epsilon(u), epsilon(w))*dx + lmbda*div(u)*div(w)*dx + alpha*p*div(w)*dx +
-                     alpha*q*div(u)*dx - tau*ff_term)
+    a = dfx.fem.form(2*mu*inner(epsilon(u), epsilon(w))*dx + lmbda*div(u)*div(w)*dx + scale*alpha*p*div(w)*dx +
+                     scale*alpha*q*div(u)*dx - scale**2*tau*ff_term)
 
     # volume forces
     f = Constant(mesh, (0.0, 0.0))  # elastic volume force
@@ -240,13 +245,13 @@ def tsx_setup_and_computation(mesh,
         solver.getPC().setType('lu')
         solver.getPC().setFactorSolverType('mumps')
     elif solver_type == 'iterative':
-        preco_naive = dfx.fem.form(2*mu*inner(epsilon(u), epsilon(w))*dx + lmbda*div(u)*div(w)*dx + tau*ff_term +
-                                   alpha**2/(lmbda + 2*mu)*p*q*dx)
+        preco_naive = dfx.fem.form(2*mu*inner(epsilon(u), epsilon(w))*dx + lmbda*div(u)*div(w)*dx + scale**2*tau*ff_term +
+                                   scale**2*alpha**2/(lmbda + 2*mu)*p*q*dx)
         P = dfx.fem.petsc.assemble_matrix(preco_naive, bcs=bcs)
         P.assemble()
 
-        preco_naive_triangular = dfx.fem.form(2*mu*inner(epsilon(u), epsilon(w))*dx + lmbda*div(u)*div(w)*dx + tau*ff_term +
-                                   alpha**2/(lmbda + 2*mu)*p*q*dx + alpha*p*div(w)*dx)
+        preco_naive_triangular = dfx.fem.form(2*mu*inner(epsilon(u), epsilon(w))*dx + lmbda*div(u)*div(w)*dx + scale**2*tau*ff_term +
+                                   scale**2*alpha**2/(lmbda + 2*mu)*p*q*dx + scale*alpha*p*div(w)*dx)
         P_triangular = dfx.fem.petsc.assemble_matrix(preco_naive_triangular, bcs=bcs)
         P_triangular.assemble()
         if filename:
@@ -266,13 +271,14 @@ def tsx_setup_and_computation(mesh,
     # time stepping
     current_time = 0.0
 
-    pressure_values = [-p_h.eval(ready_eval_points, eval_cells)]
+    pressure_values = [-p_h.eval(ready_eval_points, eval_cells)*scale_f]
     for step in range(1, t_steps_num):
         current_time += tau_f
         sigma_expression.value = min(1.0, current_time/(17*SEC_IN_DAY))
         pbc_expression.value = pressure_init*max(0.0, 1 - current_time/(17*SEC_IN_DAY))
-        L = dfx.fem.form(inner(f, w)*dx + tau*g*q*dx +
-                         alpha*div(u_h)*q*dx - cpp*p_h*q*dx -
+        # NOTE: the scale**2 factor for the previous p_h*q term since both pressures are scaled
+        L = dfx.fem.form(inner(f, w)*dx + scale*tau*g*q*dx +
+                         scale*alpha*div(u_h)*q*dx - scale**2*cpp*p_h*q*dx -
                          sigma_expression*inner(sigma_init, epsilon(w))*dx)
 
         b = dfx.fem.petsc.assemble_vector(L)
@@ -292,10 +298,10 @@ def tsx_setup_and_computation(mesh,
                 exit()
         x_h.x.scatter_forward()
         u_h, p_h = x_h.split()
-        pressure_values.append(-p_h.eval(ready_eval_points, eval_cells))
+        pressure_values.append(-p_h.eval(ready_eval_points, eval_cells)*scale_f)
 
     if solver_type == 'iterative':
-        print(f'Solver on average used {iteration_counter/(t_steps_num-1)} iterations')
+        print(f'Solver on average used {iteration_counter/(t_steps_num-1)} iterations, rtol={rtol}')
     return pressure_values
 
 
@@ -394,8 +400,9 @@ def wrapper_test():
 
     # create solver instances
     rtol = 1e-10
-    solver_direct = SolverTSX(solver_type='direct')
-    solver_iterative = SolverTSX(solver_type='iterative', rtol=rtol)
+    pressure_scale = 1e6
+    solver_direct = SolverTSX(solver_type='direct', scale=pressure_scale)
+    solver_iterative = SolverTSX(solver_type='iterative', rtol=rtol, scale=pressure_scale)
     solvers = solver_iterative, solver_direct
 
     with h5py.File('subset_inputs_outputs.h5', 'r') as file:
