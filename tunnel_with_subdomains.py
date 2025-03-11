@@ -18,7 +18,7 @@ from dolfinx.fem import Constant
 from dolfinx import plot
 
 from extract_matrices import save_full_matrix, save_matrix_as_blocks, extract_2x2subvectors, save_vectors_to_hdf5, \
-    load_matrices_from_hdf5
+    load_matrices_from_hdf5, load_vectors_from_hdf5
 
 # from ellipses_regions_generator import generate_tsx_mesh_with_regions, Ellipse
 
@@ -441,7 +441,7 @@ def wrapper_test_saving():
     blocks = load_matrices_from_hdf5('testrun_0_as_blocks.h5')  # 4 csr matrices in list
     Pdblocks = load_matrices_from_hdf5('testrun_0_diag_preco.h5')  # 4 csr matrices for preco, two are zero
     Ptblocks = load_matrices_from_hdf5('testrun_0_triang_preco.h5')
-    rhs_u, rhs_p = load_matrices_from_hdf5('testrun_0_rhs.h5')  # each rhs_* is a list of ndarrays
+    rhs_u, rhs_p = load_vectors_from_hdf5('testrun_0_rhs.h5')  # each rhs_* is a list of ndarrays
 
 
 if __name__ == '__main__':
