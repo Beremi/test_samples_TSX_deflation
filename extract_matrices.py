@@ -62,12 +62,12 @@ def save_matrices_to_hdf5(filename, matrices, sparse=True):
     with h5py.File(filename, 'w') as f:
         for i, mat in enumerate(matrices):
             if sparse:
-                # Save CSR components separately
-                f.create_dataset(f"matrix_{i}_data", data=mat[0])
-                f.create_dataset(f"matrix_{i}_indices", data=mat[1])
-                f.create_dataset(f"matrix_{i}_indptr", data=mat[2])
+                # Save CSR components separately with maximal compression
+                f.create_dataset(f"matrix_{i}_data", data=mat[0], compression='gzip', compression_opts=9)
+                f.create_dataset(f"matrix_{i}_indices", data=mat[1], compression='gzip', compression_opts=9)
+                f.create_dataset(f"matrix_{i}_indptr", data=mat[2], compression='gzip', compression_opts=9)
             else:
-                f.create_dataset(f"matrix_{i}", data=mat)
+                f.create_dataset(f"matrix_{i}", data=mat, compression='gzip', compression_opts=9)
 
 def load_matrices_from_hdf5(filename, sparse=True):
     """ generated code """
@@ -105,7 +105,7 @@ def save_vectors_to_hdf5(filename, vec_u, vec_p, step):
                 dset.resize((step + 1, vec.shape[0]))  # Expand along the first axis
             else:
                 dset = f.create_dataset(name, shape=(step + 1, vec.shape[0]), maxshape=(None, vec.shape[0]),
-                                        dtype=vec.dtype)
+                                        dtype=vec.dtype, compression='gzip', compression_opts=9)
 
             dset[step, :] = vec  # Store the new time step
 
