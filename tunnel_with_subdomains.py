@@ -301,7 +301,7 @@ def tsx_setup_and_computation(mesh,
         pressure_values.append(-p_h.eval(ready_eval_points, eval_cells)*scale_f)
 
     if solver_type == 'iterative':
-        print(f'Solver on average used {iteration_counter/(t_steps_num-1)} iterations')
+        print(f'Solver on average used {iteration_counter/(t_steps_num-1)} iterations, rtol={rtol}')
     return pressure_values
 
 
