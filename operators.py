@@ -1,5 +1,9 @@
 import numpy as np
 from scipy import sparse
+from iterative_solvers import dcg
+import pyamg
+import h5py
+import time
 
 
 class BlockMatrixOperator:
@@ -17,6 +21,10 @@ class BlockMatrixOperator:
             raise ValueError("Expected 4 blocks for a 2x2 block matrix.")
 
         self.blocks = blocks
+
+        self.blocks[0] = (self.blocks[0] + self.blocks[0].T) / 2
+        self.blocks[2] = self.blocks[1].T
+        self.blocks[3] = (self.blocks[3] + self.blocks[3].T) / 2
 
         # Unpack blocks
         block00, block01, block10, block11 = blocks
@@ -114,7 +122,7 @@ class BlockMatrixOperator:
 
 
 class BlockTriangularPreconditioner:
-    def __init__(self, blocks, verbose=False):
+    def __init__(self, blocks, verbose=False, use_dcg=False, tol=(1e-6, 1e-6)):
         """
         Initialize with a list of 4 blocks representing a 2x2 block triangular matrix.
 
@@ -168,6 +176,55 @@ class BlockTriangularPreconditioner:
         self.shape = (self.total_rows, self.total_cols)
 
         self.verbose = verbose
+        self.call_count = 0
+        self.upper_stack = []
+        self.lower_stack = []
+        self.use_dcg = use_dcg
+        self.tol_upper = tol[0]
+        self.tol_lower = tol[1]
+        self.all_vecs_upper = []
+        self.A_all_vecs_upper = []
+        self.all_vecs_norms_upper = []
+        self.W_upper = None
+        self.AW_upper = None
+        self.times_upper = []
+        self.all_iters_upper = []
+        self.all_errors_upper = []
+
+        self.all_vecs_lower = []
+        self.A_all_vecs_lower = []
+        self.all_vecs_norms_lower = []
+        self.W_lower = None
+        self.AW_lower = None
+        self.times_lower = []
+        self.all_iters_lower = []
+        self.all_errors_lower = []
+        # Load the elastic_kernel.h5 file
+        with h5py.File('elastic_kernel.h5', 'r') as f:
+            # Print the keys to see what's in the file
+            R = f['R'][:]
+
+        ml = pyamg.smoothed_aggregation_solver(
+            block00,
+            B=R,
+            strength=('symmetric', {'theta': 0.1}),
+            smooth=('energy', {'degree': 2}),
+            presmoother=('gauss_seidel', {'sweep': 'symmetric'}),
+            postsmoother=('gauss_seidel', {'sweep': 'symmetric'}),
+            improve_candidates=[('block_gauss_seidel', {'sweep': 'symmetric', 'iterations': 4})],
+            max_coarse=500
+        )
+        self.prec_upper = ml.aspreconditioner()
+        ml = pyamg.smoothed_aggregation_solver(
+            block11,
+            strength=('symmetric', {'theta': 0.1}),
+            smooth=('energy', {'degree': 2}),
+            presmoother=('gauss_seidel', {'sweep': 'symmetric'}),
+            postsmoother=('gauss_seidel', {'sweep': 'symmetric'}),
+            improve_candidates=[('block_gauss_seidel', {'sweep': 'symmetric', 'iterations': 4})],
+            max_coarse=500
+        )
+        self.prec_lower = ml.aspreconditioner()
 
     def __call__(self, b):
         """
@@ -199,10 +256,61 @@ class BlockTriangularPreconditioner:
 
         # Solve the system in two steps
         # 1. Solve for x2: block11 * x2 = b2
-        x2 = sparse.linalg.spsolve(block11, b2)
+        start = time.time()
+        x2, j, resvec, tag, p_list, Ap_list, pnorm_list, y = dcg(
+            A=block11, b=b2, M=self.prec_lower, W=self.W_lower, AW=self.AW_lower,
+            tol=self.tol_lower, maxiter=100, is_W_A_orthonormal=True)
+
+        if y is not None and self.use_dcg:
+            A_y = block11 @ y
+            y_norm = np.sqrt(np.dot(A_y, y))
+            y = y / y_norm
+            A_y = A_y / y_norm
+            self.all_vecs_lower.append(y)
+            self.A_all_vecs_lower.append(A_y)
+            self.all_vecs_norms_lower.append(y_norm)
+            self.W_lower = np.column_stack(self.all_vecs_lower)
+            self.AW_lower = np.column_stack(self.A_all_vecs_lower)
+
+        duration = time.time() - start
+        self.times_lower.append(duration)
+        self.all_iters_lower.append(j)
+        self.all_errors_lower.append(resvec[-1])
+        # print(f"Lower: {j}, {resvec[-1]}")
+        # else:
+        #     x2 = sparse.linalg.spsolve(block11, b2)
 
         # 2. Solve for x1: block00 * x1 = b1 - block01 * x2
-        x1 = sparse.linalg.spsolve(block00, b1 - block01.dot(x2))
+        b1 = b1 - block01.dot(x2)
 
+        start = time.time()
+        x1, j, resvec, tag, p_list, Ap_list, pnorm_list, y = dcg(
+            A=block00, b=b1, M=self.prec_upper, W=self.W_upper, AW=self.AW_upper,
+            tol=self.tol_upper, maxiter=100, is_W_A_orthonormal=True)
+
+        if y is not None and self.use_dcg:
+            A_y = block00 @ y
+            y_norm = np.sqrt(np.dot(A_y, y))
+            y = y / y_norm
+            A_y = A_y / y_norm
+            self.all_vecs_upper.append(y)
+            self.A_all_vecs_upper.append(A_y)
+            self.all_vecs_norms_upper.append(y_norm)
+            self.W_upper = np.column_stack(self.all_vecs_upper)
+            self.AW_upper = np.column_stack(self.A_all_vecs_upper)
+
+        duration = time.time() - start
+        self.times_upper.append(duration)
+        self.all_iters_upper.append(j)
+        self.all_errors_upper.append(resvec[-1])
+        # print(f"upper: {j}, {resvec[-1]}")
+        # else:
+        #     x1 = sparse.linalg.spsolve(block00, b1)
+
+        self.call_count += 1
         # Combine the results
+
+        self.upper_stack.append({'u': x1, 'b': b1})
+        self.lower_stack.append({'u': x2, 'b': b2})
+
         return np.concatenate([x1, x2])
